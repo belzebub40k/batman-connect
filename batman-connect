@@ -1,0 +1,99 @@
+#!/bin/bash
+
+source ~/.batman-connect
+
+if [[ -z "${1}" ]]; then
+  echo "Error: side missing!"
+  #usage
+else
+  SITE=${1}
+fi
+
+if [ "$(id -u)" != "0" ]; then
+   echo "This script must be run as root!" 1>&2
+   exit 1
+fi
+
+TMP_FILE="/tmp/fastd-${SITE}.conf"
+
+FASTD_TEMPLATE=$(awk '/^__FASTD_TEMPLATE__/ {print NR + 1; exit 0; }' $0)
+tail -n+${FASTD_TEMPLATE} $0 > ${TMP_FILE}
+
+END=$(eval echo "\$${SITE}_peers")
+
+for i in $(seq 1 ${END});do
+  PEER_HOST=$(eval echo "\$${SITE}_peer_${i}_host")
+  PEER_PORT=$(eval echo "\$${SITE}_peer_${i}_port")
+  PEER_PUB=$(eval echo "\$${SITE}_peer_${i}_pub")
+  PEER_NAME=$(echo "${PEER_HOST}" | sed -e's/\..*//')
+
+  PEERS="${PEERS}  peer \"${PEER_NAME}\" {\n"
+  PEERS="${PEERS}    remote \"${PEER_HOST}\" port ${PEER_PORT};\n"
+  PEERS="${PEERS}    key \"${PEER_PUB}\";\n"
+  PEERS="${PEERS}  }\n"
+done
+
+MTU=$(eval echo "\$${SITE}_mtu")
+METHOD=$(eval echo "\$${SITE}_method")
+SECRET=$(eval echo "\$${SITE}_secret")
+PEER_LIMIT=$(eval echo "\$${SITE}_peer_limit")
+
+sed -i -e "s/__MTU__/${MTU}/" "${TMP_FILE}"
+sed -i -e "s/__METHOD__/${METHOD}/" "${TMP_FILE}"
+sed -i -e "s/__SECRET__/${SECRET}/" "${TMP_FILE}"
+sed -i -e "s/__PEER_LIMIT__/${PEER_LIMIT}/" "${TMP_FILE}"
+sed -i -e "s/__PEERS__/${PEERS}/" "${TMP_FILE}"
+
+fastd --config "${TMP_FILE}"
+
+#rm -f ${TMP_FILE}
+
+exit 0
+
+__FASTD_TEMPLATE__
+log level info;
+
+interface "mesh-vpn";
+mode tap;
+mtu __MTU__;
+
+method "__METHOD__";
+secure handshakes yes;
+secret "__SECRET__";
+
+peer group "peers" {
+  peer limit __PEER_LIMIT__;
+__PEERS__
+}
+
+on pre-up "
+  modprobe batman-adv
+";
+
+on up "
+  ip link set up dev $INTERFACE
+  batctl if add $INTERFACE
+  ip link set up dev bat0
+
+  ip6tables -F
+  ip6tables -X
+
+  ip6tables -P INPUT ACCEPT
+  ip6tables -P FORWARD ACCEPT
+  ip6tables -P OUTPUT ACCEPT
+
+  # allow all ICMP traffic
+  ip6tables -A INPUT -p icmpv6 -j ACCEPT
+
+  # allow all ESTABLISHED and RELATED connections
+  ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+  ip6tables -A INPUT -i bat0 -j DROP
+  ip6tables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+  ip6tables -A FORWARD -i bat0 -j DROP
+";
+
+on post-down "
+  ip6tables -F
+  ip6tables -X
+  modprobe -r batman-adv
+";
