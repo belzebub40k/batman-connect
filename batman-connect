@@ -1,17 +1,24 @@
 #!/bin/bash
 
-source ~/.batman-connect
+# general script settings
+BC_SERVICE="batmanconnect"
 
-if [[ -z "${1}" ]]; then
-  echo "Error: side missing!"
-  #usage
-else
-  SITE=${1}
-fi
+# general path settings
+INSTANCEPATH=$PWD
+source $PWD/.batman-connect
 
+# Throw an error when the script isn't running as root
 if [ "$(id -u)" != "0" ]; then
    echo "This script must be run as root!" 1>&2
    exit 1
+fi
+
+#Check if 2 arguments are given
+if [ $# -lt 2 ]; then
+  echo "Usage: batman-connect {start|stop|restart|debug|status|cleanup} [connection_prefix]"
+  exit 1
+else
+  SITE=${2}
 fi
 
 TMP_FILE="/tmp/fastd-${SITE}.conf"
@@ -44,9 +51,105 @@ sed -i -e "s/__SECRET__/${SECRET}/" "${TMP_FILE}"
 sed -i -e "s/__PEER_LIMIT__/${PEER_LIMIT}/" "${TMP_FILE}"
 sed -i -e "s/__PEERS__/${PEERS}/" "${TMP_FILE}"
 
-fastd --config "${TMP_FILE}"
+# Show a neat usage info
+bc_start() {
+  if pgrep -f $BC_SERVICE > /dev/null
+  then
+    echo "$BC_SERVICE is already running!"
+    exit 0
+  else
+    echo "Starting $BC_SERVICE..."
+    screen -AmdS $BC_SERVICE-$SITE fastd --config "${TMP_FILE}"
+    sleep 10
+    dhclient bat0
+    if pgrep -f $BC_SERVICE > /dev/null
+    then
+      echo "$BC_SERVICE is now running."
+    else
+      echo "Error! Could not start $BC_SERVICE!"
+    fi
+  fi
+}
 
-#rm -f ${TMP_FILE}
+bc_stop() {
+  if pgrep -f $BC_SERVICE > /dev/null
+  then
+    echo "Stopping $BC_SERVICE..."
+    screen -X -S $BC_SERVICE-$SITE quit
+    kill $(pidof dhclient)
+    kill $(pidof fastd)
+    sleep 2 
+  else
+    echo "$BC_SERVICE is not running."
+    exit 1
+  fi
+  if pgrep -f $BC_SERVICE > /dev/null
+  then
+    echo "Error! $BC_SERVICE could not be stopped."
+  else
+    echo "$BC_SERVICE has been stopped."
+  fi
+}
+
+
+bc_restart() {
+  bc_stop
+  bc_start
+}
+
+bc_debug() {
+  if pgrep -f $BC_SERVICE > /dev/null
+  then
+    echo "$BC_SERVICE is already running!"
+    exit 0
+  else
+    echo "Starting $BC_SERVICE..."
+    fastd --config "${TMP_FILE}" --log-level debug
+  fi
+}
+
+bc_cleanup() {
+  if pgrep -f $BC_SERVICE > /dev/null
+  then
+    echo "Error! Cannot cleanup while $BC_SERVICE is running."
+    exit 1
+  else
+    rm -f ${TMP_FILE}
+    echo "Cleanup done!"
+    exit 0
+  fi
+}
+
+case "$1" in
+  start)
+    bc_start
+    ;;
+  stop)
+    bc_stop
+    ;;
+  restart)
+    bc_restart
+    ;;
+  debug)
+    bc_debug
+    ;;
+  status)
+    if pgrep -f $BC_SERVICE > /dev/null
+    then
+      echo "$BC_SERVICE is running."
+      exit 0
+    else
+      echo "$BC_SERVICE is not running."
+      exit 1
+    fi
+    ;;
+    cleanup)
+    bc_cleanup
+    ;;
+  *)
+    exit 1
+    ;;
+esac
 
 exit 0
 
@@ -74,24 +177,20 @@ on up "
   ip link set up dev $INTERFACE
   batctl if add $INTERFACE
   ip link set up dev bat0
-
   ip6tables -F
   ip6tables -X
-
   ip6tables -P INPUT ACCEPT
   ip6tables -P FORWARD ACCEPT
   ip6tables -P OUTPUT ACCEPT
-
   # allow all ICMP traffic
   ip6tables -A INPUT -p icmpv6 -j ACCEPT
-
   # allow all ESTABLISHED and RELATED connections
   ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
   ip6tables -A INPUT -i bat0 -j DROP
   ip6tables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
   ip6tables -A FORWARD -i bat0 -j DROP
 ";
-
+ 
 on post-down "
   ip6tables -F
   ip6tables -X
