@@ -1,5 +1,5 @@
-secret="fill_in_your_fastd_secret"
-method="salsa2012+umac"
+secret="fill_in_your_fastd_secret" ## generate a secret key with 'fastd --generate-key'
+method="salsa2012+umac" ## Method has to be same which your community is using. Reference: http://fastd.readthedocs.io/en/v18/manual/methods.html#list-of-methods
 mtu="1406"
 peer_limit="1"
 
